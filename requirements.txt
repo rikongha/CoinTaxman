@@ -4,7 +4,7 @@
 #
 #    pip-compile --output-file=requirements.txt dependencies/requirements.in
 #
-certifi==2023.7.22
+certifi==2024.7.4
     # via requests
 charset-normalizer==3.1.0
     # via requests
@@ -12,13 +12,13 @@ idna==3.7
     # via requests
 python-dateutil==2.8.1
     # via -r dependencies/requirements.in
-requests==2.31.0
+requests==2.32.4
     # via -r dependencies/requirements.in
 six==1.16.0
     # via python-dateutil
 tzdata==2022.1
     # via -r dependencies/requirements.in
-urllib3==1.26.18
+urllib3==2.5.0
     # via requests
 xlsxwriter==3.0.3
     # via -r dependencies/requirements.in
