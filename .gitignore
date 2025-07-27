@@ -9,6 +9,8 @@ export/*
 
 # Development folder
 dev/
+report/
+docs/*
 
 # IDE
 .vscode/
