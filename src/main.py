@@ -16,6 +16,7 @@
 
 import os
 
+import config
 import log_config
 from book import Book
 from config import TMP_LOG_FILEPATH
@@ -52,6 +53,8 @@ def main() -> None:
     # Resolve dependencies between sells and buys, which is
     # necessary to correctly calculate the buying cost of a sold coin
     book.match_fees()
+    # Fix ETH→BETH conversion cost basis transfers before resolving trades
+    book.fix_eth_beth_conversions()
     book.resolve_trades()
 
     taxman.evaluate_taxation()

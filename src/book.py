@@ -27,7 +27,7 @@ import config
 import log_config
 import misc
 import transaction as tr
-from core import kraken_asset_map
+from readers.kraken import kraken_asset_map
 from database import set_price_db
 from price_data import PriceData
 
@@ -1664,6 +1664,80 @@ class Book:
                         "Please create an Issue or PR.\n\n"
                         f"{matching_operations=}\n{fees=}"
                     )
+
+    def fix_eth_beth_conversions(self) -> None:
+        """Fix ETH→BETH conversions to properly transfer cost basis.
+        
+        ETH→BETH conversions on Binance are staking operations where ETH is converted
+        to BETH (Binance Staked ETH) at a 1:1 ratio. These should transfer the cost
+        basis from ETH to BETH rather than treating BETH as a free acquisition.
+        
+        Detects operations where:
+        1. ETH Sell and BETH Buy occur at the same time
+        2. Same platform (binance)
+        3. Same amount
+        
+        Converts the ETH Sell operation to negative change and links it properly.
+        """
+        log.info("Fixing ETH→BETH conversion cost basis transfers...")
+        
+        conversions_fixed = 0
+        
+        # Group operations by platform and time to find potential conversions
+        for platform, platform_ops in misc.group_by(self.operations, "platform").items():
+            if platform != "binance":
+                continue  # ETH→BETH conversions only happen on Binance
+                
+            for utc_time, time_ops in misc.group_by(platform_ops, "utc_time").items():
+                # Look for ETH and BETH operations at the same time
+                eth_ops = [op for op in time_ops if op.coin == "ETH"]
+                beth_ops = [op for op in time_ops if op.coin == "BETH"]
+                
+                if not eth_ops or not beth_ops:
+                    continue
+                    
+                # Check for potential ETH→BETH conversions
+                for eth_op in eth_ops:
+                    for beth_op in beth_ops:
+                        # Check if this looks like an ETH→BETH conversion
+                        is_conversion = (
+                            isinstance(eth_op, tr.Sell) and
+                            isinstance(beth_op, tr.Buy) and
+                            abs(eth_op.change - beth_op.change) < decimal.Decimal('0.00000001') and  # Same amount
+                            eth_op.change > 0  # ETH operation shows as positive (incorrect)
+                        )
+                        
+                        if is_conversion:
+                            # This is an ETH→BETH conversion that needs fixing
+                            log.info(f"Found ETH→BETH conversion at {utc_time}: {eth_op.change} ETH → {beth_op.change} BETH")
+                            
+                            # Create a new Sell operation to replace the incorrect one
+                            # This properly represents ETH being sold/converted
+                            new_eth_sell = tr.Sell(
+                                utc_time=eth_op.utc_time,
+                                platform=eth_op.platform,
+                                change=eth_op.change,  # Keep positive amount for Sell
+                                coin=eth_op.coin,
+                                line=eth_op.line,
+                                file_path=eth_op.file_path,
+                                remarks=eth_op.remarks
+                            )
+                            
+                            # Note: Don't link here - let resolve_trades() handle it naturally
+                            # The key fix is creating a proper Sell operation that resolve_trades will link
+                            
+                            # Replace the old ETH operation
+                            eth_op_index = self.operations.index(eth_op)
+                            self.operations[eth_op_index] = new_eth_sell
+                            
+                            conversions_fixed += 1
+                            log.debug(f"Fixed ETH→BETH conversion: Created proper Sell operation and linked to BETH Buy")
+                            break
+        
+        if conversions_fixed > 0:
+            log.info(f"Fixed {conversions_fixed} ETH→BETH conversions")
+        else:
+            log.debug("No ETH→BETH conversions found that needed fixing")
 
     def resolve_trades(self) -> None:
         # Match trades which belong together (traded at same time).

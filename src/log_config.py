@@ -30,7 +30,7 @@ for handler in log.handlers:
 ch = logging.StreamHandler()
 ch.setLevel(logging.DEBUG)
 fh = logging.FileHandler(TMP_LOG_FILEPATH, "w")
-fh.setLevel(logging.WARNING)
+fh.setLevel(logging.DEBUG)  # Log all debug info to file for comprehensive debugging
 
 # Formatter
 formatter = logging.Formatter("%(asctime)s %(name)-12s %(levelname)-8s %(message)s")
