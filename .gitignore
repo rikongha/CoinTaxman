@@ -6,11 +6,13 @@ __pycache__
 account_statements/*
 data/*
 export/*
+report/
+docs/*
 
 # Development folder
 dev/
-report/
-docs/*
+.env
+..bfg-report/**/*
 
 # IDE
 .vscode/
