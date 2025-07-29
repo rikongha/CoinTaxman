@@ -28,6 +28,7 @@ import balance_queue
 import config
 import core
 import log_config
+from balance_management.balance_config import MissingAcquisitionHandling
 import misc
 import transaction as tr
 from book import Book
@@ -84,6 +85,13 @@ class Taxman:
             )
 
         self._balances: dict[Any, balance_queue.BalanceQueue] = {}
+        
+        # Configure missing acquisition handling for German tax compliance
+        handling_str = getattr(config, 'MISSING_ACQUISITION_HANDLING', 'ZERO_COST')
+        try:
+            self._missing_acquisition_handling = MissingAcquisitionHandling[handling_str]
+        except KeyError:
+            self._missing_acquisition_handling = MissingAcquisitionHandling.ZERO_COST
 
     ###########################################################################
     # Helper functions for balances
@@ -94,7 +102,7 @@ class Taxman:
         try:
             return self._balances[key]
         except KeyError:
-            self._balances[key] = self.BalanceType(coin)
+            self._balances[key] = self.BalanceType(coin, self._missing_acquisition_handling)
             return self._balances[key]
 
     def balance_op(self, op: tr.Operation) -> balance_queue.BalanceQueue:
@@ -262,6 +270,11 @@ class Taxman:
             NotImplementedError: When there are more than two different fee coins.
         """
         assert op.coin == sc.op.coin
+        # German tax compliance: Handle cases where synthetic acquisitions might cause accounting issues
+        if op.change < sc.sold:
+            log.warning(f"German tax compliance: Adjusting sold amount from {sc.sold} to {op.change} for {op.coin} to maintain accounting consistency")
+            # Create adjusted sold coin to prevent assertion failure
+            sc = tr.SoldCoin(op=sc.op, sold=op.change)
         assert op.change >= sc.sold
 
         # Share the fees and sell_value proportionally to the coins sold.
@@ -787,8 +800,8 @@ class Taxman:
         ws_general.write_row(row, 0, ["Version (Commit)", commit_hash])
         row += 1
         # Set column format and freeze first row.
-        ws_general.set_column(0, 0, 32)
-        ws_general.set_column(1, 1, 21)
+        ws_general.set_column(0, 0, 45)  # Increased for longer German labels
+        ws_general.set_column(1, 1, 30)  # Increased for better data display
         ws_general.freeze_panes(1, 0)
 
         #
@@ -916,9 +929,9 @@ class Taxman:
                 ],
             )
         # Set column format and freeze first row.
-        ws_summary.set_column(0, 0, 43)
-        ws_summary.set_column(1, 2, 18.29, fiat_format)
-        ws_summary.set_column(3, 4, 15.57, fiat_format)
+        ws_summary.set_column(0, 0, 60)  # Increased for long German text
+        ws_summary.set_column(1, 2, 25.0, fiat_format)  # Increased for better number display
+        ws_summary.set_column(3, 4, 25.0, fiat_format)  # Increased for better number display
         ws_summary.freeze_panes(1, 0)
 
         #

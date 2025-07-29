@@ -107,22 +107,48 @@ def __patch_001(db_path: Path) -> None:
         db_path (Path)
     """
     with sqlite3.connect(db_path) as conn:
+        # Clean up any existing temp table first
+        conn.execute('DROP TABLE IF EXISTS "sql_temp_table";')
+        
         query = "SELECT name,sql FROM sqlite_master WHERE type='table'"
         cur = conn.execute(query)
+        tables_to_patch = []
+        
         for tablename, sql in cur.fetchall():
             if "price str" not in sql.lower() and not tablename.startswith("§"):
+                tables_to_patch.append(tablename)
+        
+        # Process each table separately to avoid conflicts
+        for tablename in tables_to_patch:
+            try:
+                # Clean up any existing temp table
+                conn.execute('DROP TABLE IF EXISTS "sql_temp_table";')
+                
+                # Create temp table
                 conn.execute(
                     """CREATE TABLE "sql_temp_table" (
                     "utc_time" DATETIME PRIMARY KEY,
                     "price"	VARCHAR(255) NOT NULL
                 );"""
                 )
+                
+                # Insert data with deduplication (keep latest entry for duplicates)
                 conn.execute(
                     f"""INSERT INTO "sql_temp_table" ("utc_time","price")
-                SELECT "utc_time",cast("price" as text) FROM "{tablename}";"""
+                SELECT "utc_time", cast("price" as text) FROM "{tablename}"
+                GROUP BY "utc_time"
+                HAVING MAX(rowid);"""
                 )
+                
+                # Replace original table
                 conn.execute(f'DROP TABLE "{tablename}";')
                 conn.execute(f'ALTER TABLE "sql_temp_table" RENAME TO "{tablename}";')
+                
+            except sqlite3.Error as e:
+                log.warning(f"Failed to patch table {tablename}: {e}")
+                # Clean up temp table if it exists
+                conn.execute('DROP TABLE IF EXISTS "sql_temp_table";')
+                continue
 
 
 def __patch_002(db_path: Path) -> None:
@@ -136,6 +162,9 @@ def __patch_002(db_path: Path) -> None:
         tablenames = get_tablenames_from_db(cur)
         # Iterate over all tables.
         for tablename in tablenames:
+            # Skip tables that don't contain "/" separator
+            if "/" not in tablename:
+                continue
             base_asset, quote_asset = tablename.split("/")
 
             # Adjust the order, when the symbols aren't ordered alphanumerical.

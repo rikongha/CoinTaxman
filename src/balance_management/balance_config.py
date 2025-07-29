@@ -22,6 +22,13 @@ class DepotMode(Enum):
     MULTI = "MULTI"   # Track each platform separately
 
 
+class MissingAcquisitionHandling(Enum):
+    """How to handle sales without sufficient balance."""
+    ERROR = "ERROR"        # Throw error
+    ZERO_COST = "ZERO_COST"  # Assume €0 cost basis acquisition (airdrop/fork)
+    WARNING = "WARNING"    # Log warning but continue
+
+
 @dataclass(frozen=True)
 class BalanceKey:
     """Key for identifying unique balance queues."""
@@ -48,6 +55,7 @@ class BalanceConfig:
     principle: BalancingPrinciple
     depot_mode: DepotMode
     fiat_currency: str
+    missing_acquisition_handling: MissingAcquisitionHandling = MissingAcquisitionHandling.ERROR
     
     @classmethod
     def from_global_config(cls) -> 'BalanceConfig':
@@ -61,8 +69,16 @@ class BalanceConfig:
             core.Principle.LIFO: BalancingPrinciple.LIFO
         }
         
+        # Map missing acquisition handling
+        handling_str = getattr(config, 'MISSING_ACQUISITION_HANDLING', 'ZERO_COST')
+        try:
+            missing_handling = MissingAcquisitionHandling[handling_str]
+        except KeyError:
+            missing_handling = MissingAcquisitionHandling.ZERO_COST  # German tax compliant default
+        
         return cls(
             principle=principle_map.get(config.PRINCIPLE, BalancingPrinciple.FIFO),
             depot_mode=DepotMode.MULTI if getattr(config, 'MULTI_DEPOT', False) else DepotMode.SINGLE,
-            fiat_currency=getattr(config, 'FIAT_CURRENCY', 'EUR')
+            fiat_currency=getattr(config, 'FIAT_CURRENCY', 'EUR'),
+            missing_acquisition_handling=missing_handling
         )

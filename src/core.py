@@ -193,4 +193,28 @@ class Fiat(Enum):
     ZWD = "Zimbabwe Dollar"
 
 
-
+# Kraken trading pair mappings for price data API
+kraken_pair_map = {
+    "BTCEUR": "XBTEUR",
+    "ETHEUR": "ETHEUR", 
+    "XRPEUR": "XXRPZEUR",
+    "LTCEUR": "XLTCZEUR",
+    "XLMEUR": "XXLMZEUR",
+    "ETCEUR": "XETCZEUR",
+    "XMREUR": "XXMRZEUR",
+    "REPEUR": "XREPZEUR",
+    "ZECEUR": "XZECZEUR",
+    "ADAEUR": "ADAEUR",
+    "DOTEUR": "DOTEUR",
+    "LINKEUR": "LINKEUR",
+    "ATOMEUR": "ATOMEUR",
+    "BTCUSD": "XBTUSD",
+    "ETHUSD": "ETHUSD",
+    "XRPUSD": "XXRPZUSD",
+    "LTCUSD": "XLTCZUSD",
+    "XLMUSD": "XXLMZUSD",
+    "ETCUSD": "XETCZUSD",
+    "XMRUSD": "XXMRZUSD",
+    "REPUSD": "XREPZUSD",
+    "ZECUSD": "XZECZUSD",
+}

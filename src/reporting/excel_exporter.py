@@ -15,6 +15,7 @@ import config
 import misc
 from .report_generator import ReportGenerator, ReportData, TaxReportSummary
 from .excel_formatter import ExcelLayoutManager, ExcelWorksheetHelper
+from .german_tax_summary import GermanTaxSummaryCalculator
 
 
 class ExcelReportExporter(ReportGenerator):
@@ -42,6 +43,8 @@ class ExcelReportExporter(ReportGenerator):
         
         try:
             # Create report sections
+            if self.locale == "german":
+                self._create_german_tax_summary_sheet(layout_manager, report_data)
             self._create_general_sheet(layout_manager, report_data)
             self._create_sell_events_sheet(layout_manager, report_data)
             self._create_interest_events_sheet(layout_manager, report_data)
@@ -54,6 +57,122 @@ class ExcelReportExporter(ReportGenerator):
             workbook.close()
         
         return file_path
+    
+    def _create_german_tax_summary_sheet(self, layout_manager: ExcelLayoutManager, report_data: ReportData):
+        """Create German tax summary sheet as first page (German reports only)."""
+        # Create worksheet with explicit German name (don't use localization to avoid conflicts)
+        worksheet = layout_manager.workbook.add_worksheet("Steuer-Zusammenfassung")
+        helper = ExcelWorksheetHelper(worksheet, layout_manager.formats)
+        
+        # Calculate German tax summary
+        calculator = GermanTaxSummaryCalculator()
+        summary = calculator.calculate_summary(report_data)
+        
+        # Debug: Print summary data to understand what we have
+        print(f"🔍 German tax summary debug:")
+        print(f"  Tax year: {summary.tax_year}")
+        print(f"  Sell events: {len(report_data.sell_events)}")
+        print(f"  Interest events: {len(report_data.interest_events)}")
+        print(f"  Misc events: {len(report_data.misc_events)}")
+        print(f"  §23 EStG net: €{summary.paragraph_23_net_gain_loss}")
+        print(f"  §22 Nr.3 total: €{summary.paragraph_22_total_income}")
+        print(f"  Taxable amount: €{report_data.taxable_amount}")
+        
+        # Title
+        helper.write_title(f"Ermittlung der Besteuerungsgrundlagen aus Gewinnen und Verlusten\naus dem Handel mit Kryptowährungen {summary.tax_year}")
+        
+        # §23 EStG Section - Private Sales Transactions
+        helper.write_section_header("Ermittlung der sonstigen Einkünfte aus privaten Veräußerungsgeschäften nach § 23 EStG in EUR")
+        
+        paragraph_23_data = {
+            "Summe Veräußerungsgewinn /-verlust": f"{summary.paragraph_23_net_gain_loss:.2f}",
+            "Freigrenze": f"{summary.paragraph_23_freigrenze:.2f}",
+            "Steuerrelevanter Veräußerungsgewinn /-verlust": f"{summary.paragraph_23_taxable_amount:.2f}",
+            "Sonstige Einkünfte aus privaten Veräußerungsgeschäften im Sinne des § 23 EStG": "",
+            "- einzutragen in Anlage SO - Zeile 54 -": f"{summary.paragraph_23_taxable_amount:.2f}"
+        }
+        
+        for key, value in paragraph_23_data.items():
+            helper.write_data_row([key, value])
+        
+        helper.add_blank_row()
+        
+        # §22 Nr. 3 EStG Section - Income from Other Services
+        helper.write_section_header("Ermittlung der sonstigen Einkünfte nach § 22 Nr. 3 EStG in EUR")
+        
+        paragraph_22_data = {
+            "Summe sonstige Einkünfte": f"{summary.paragraph_22_total_income:.2f}",
+            "Freigrenze": f"{summary.paragraph_22_allowance:.2f}",
+            "Steuerrelevante sonstige Einkünfte": f"{summary.paragraph_22_taxable_income:.2f}",
+            "Sonstige Einkünfte im Sinne des § 22 Nr. 3 EStG": "",
+            "- einzutragen in Anlage SO - Zeile 11 -": f"{summary.paragraph_22_taxable_income:.2f}"
+        }
+        
+        for key, value in paragraph_22_data.items():
+            helper.write_data_row([key, value])
+        
+        helper.add_blank_row()
+        
+        # KAP Section - Capital Gains
+        helper.write_section_header("Ermittlung der Kapitalerträge, die nicht dem inländischen Steuerabzug unterlegen haben")
+        
+        kap_data = {
+            "Inländische Kapitalerträge": f"{summary.kap_domestic_gains:.2f}",
+            "- einzutragen in Anlage KAP - Zeile 18 -": "",
+            "Ausländische Kapitalerträge": f"{summary.kap_foreign_gains:.2f}",
+            "- einzutragen in Anlage KAP - Zeile 19 -": "",
+            "In den Zeilen 18 und 19 enthaltene Gewinne aus Aktienveräußerungen": f"{summary.kap_stock_gains:.2f}",
+            "- einzutragen in Anlage KAP - Zeile 20 -": "",
+            "In den Zeilen 18 und 19 enthaltene Einkünfte aus Gewinne aus Termingeschäften": f"{summary.kap_derivative_gains:.2f}",
+            "- einzutragen in Anlage KAP - Zeile 21 -": "",
+            "In den Zeilen 18 und 19 enthaltene Verluste ohne Verluste aus der Veräußerung von Aktien": f"{summary.kap_losses_without_stocks:.2f}",
+            "- einzutragen in Anlage KAP - Zeile 22 -": "",
+            "In den Zeilen 18 und 19 enthaltene Verluste aus der Veräußerung von Aktien": f"{summary.kap_stock_losses:.2f}",
+            "- einzutragen in Anlage KAP - Zeile 23 -": "",
+            "Verluste aus Termingeschäften": f"{summary.kap_derivative_losses:.2f}",
+            "- einzutragen in Anlage KAP - Zeile 24 -": ""
+        }
+        
+        for key, value in kap_data.items():
+            helper.write_data_row([key, value])
+        
+        helper.add_blank_row()
+        
+        # Fees and Costs Section
+        helper.write_section_header("Nicht abgezogene Gesamt-Transaktionswerte in EUR")
+        
+        fees_data = {
+            "Fee": f"{summary.total_fees:.2f}",
+            "Lost": f"{summary.lost_coins:.2f}",
+            "Derivative Fee": f"{summary.derivative_fees:.2f}"
+        }
+        
+        for key, value in fees_data.items():
+            helper.write_data_row([key, value])
+        
+        helper.add_blank_row()
+        
+        # §22 Nr. 3 EStG Breakdown Section
+        helper.write_section_header(f"Ermittlung der Besteuerungsgrundlagen von steuerrelevanten Zuflüssen\nim Zusammenhang mit Kryptowährungen {summary.tax_year}")
+        helper.write_data_row(["- Anlage zu den Einkünften aus sonstigen Leistungen -", ""])
+        helper.add_blank_row()
+        
+        helper.write_section_header("Zuflüsse im Zusammenhang mit Kryptowährungen in EUR")
+        
+        income_breakdown = {
+            "Lending": f"{summary.paragraph_22_lending:.2f}",
+            "Staking": f"{summary.paragraph_22_staking:.2f}",
+            "Masternodes": "0.00",  # Not separately tracked yet
+            "Mining (nicht gewerblich)": f"{summary.paragraph_22_mining:.2f}",
+            "Bounties": f"{summary.paragraph_22_bounties:.2f}",
+            "Income": f"{summary.paragraph_22_other:.2f}",
+            "Summe sonstige Einkünfte": f"{summary.paragraph_22_total_income:.2f}"
+        }
+        
+        for key, value in income_breakdown.items():
+            helper.write_data_row([key, value])
+        
+        helper.auto_fit_columns()
     
     def _create_general_sheet(self, layout_manager: ExcelLayoutManager, report_data: ReportData):
         """Create the general information sheet."""

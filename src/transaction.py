@@ -211,12 +211,56 @@ class StakingInterest(Transaction):
     pass
 
 
+class CoinLend(Transaction):
+    """Lending coins to earn interest"""
+    pass
+
+
+class CoinLendEnd(Transaction):
+    """End of coin lending period"""
+    pass
+
+
+class Staking(Transaction):
+    """Staking coins"""
+    pass
+
+
+class StakingEnd(Transaction):
+    """End of staking period"""
+    pass
+
+
+class Mining(Operation):
+    """Mining operation (block rewards and fees)"""
+    pass
+
+
+class MiningPoolReward(Transaction):
+    """Rewards from mining pools"""
+    pass
+
+
 class Airdrop(Transaction):
     pass
 
 
 class Commission(Transaction):
     pass
+
+
+@dataclasses.dataclass
+class Gift(Transaction):
+    """Represents a gift/transfer to another person (taxable disposal under German law)"""
+    recipient: Optional[str] = None  # Optional recipient identifier
+
+
+@dataclasses.dataclass
+class HardFork(Transaction):
+    """Represents a hard fork event creating new tokens from existing holdings"""
+    original_coin: Optional[str] = None  # The original coin that was forked
+    fork_ratio: Optional[decimal.Decimal] = None  # Optional ratio (e.g., 1:1, 1:10)
+    fork_date: Optional[datetime.datetime] = None  # Fork event date
 
 
 class Deposit(Transaction):
@@ -316,7 +360,7 @@ class TaxReportEntry:
 
     @property
     def _taxable_gain_in_fiat(self) -> Optional[decimal.Decimal]:
-        if self.is_taxable and self._gain_in_fiat:
+        if self.is_taxable and self._gain_in_fiat is not None:
             return self._gain_in_fiat
         if self.get_excel_label("taxable_gain_in_fiat") == "-":
             return None
@@ -430,21 +474,21 @@ class TaxReportEntry:
                 if label == "-":
                     width = 15.0
                 elif field.name == "taxation_type":
-                    width = 43.0
+                    width = 55.0  # Increased for German tax types
                 elif field.name == "taxable_gain_in_fiat":
-                    width = 13.0
+                    width = 18.0  # Increased for decimal precision
                 elif (
                     field.name.endswith("_in_fiat")
                     or "coin" in field.name
                     or "platform" in field.name
                 ):
-                    width = 15.0
+                    width = 18.0  # Increased for better visibility
                 elif field.type in ("datetime.datetime", "Optional[datetime.datetime]"):
-                    width = 18.43
+                    width = 22.0  # Increased for full datetime display
                 elif field.type in ("decimal.Decimal", "Optional[decimal.Decimal]"):
-                    width = 20.0
+                    width = 25.0  # Increased for high-precision decimals
                 else:
-                    width = 18.0
+                    width = 20.0  # Increased default width
                 hidden = label == "-"
                 yield field, width, hidden
 

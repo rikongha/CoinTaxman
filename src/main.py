@@ -23,6 +23,7 @@ from config import TMP_LOG_FILEPATH
 from patch_database import patch_databases
 from price_data import PriceData
 from taxman import Taxman
+from services.missing_coins_tracker import get_missing_coins_tracker
 
 log = log_config.getLogger(__name__)
 
@@ -58,13 +59,28 @@ def main() -> None:
     book.resolve_trades()
 
     taxman.evaluate_taxation()
-    evaluation_file_path = taxman.export_evaluation_as_excel()
+    
+    # Use new reporting system with German tax summary
+    try:
+        from reporting.tax_report_service import generate_reports_from_taxman
+        report_paths = generate_reports_from_taxman(taxman)
+        evaluation_file_path = report_paths[0]  # German report (first)
+        print(f"✅ Generated reports with German tax summary: {[p.name for p in report_paths]}")
+    except Exception as e:
+        print(f"⚠️  New reporting failed, falling back to legacy: {e}")
+        evaluation_file_path = taxman.export_evaluation_as_excel()
+    
     taxman.print_evaluation()
 
     # Save log
     log_file_path = evaluation_file_path.with_suffix(".log")
     log_config.shutdown()
     os.rename(TMP_LOG_FILEPATH, log_file_path)
+
+    # Export missing coins for manual sourcing
+    missing_tracker = get_missing_coins_tracker()
+    missing_tracker.export_missing_coins()
+    missing_tracker.print_summary()
 
     print(f"Detailed export saved at {evaluation_file_path} and {log_file_path}")
     print("If you want to archive the evaluation, run `make archive`.")

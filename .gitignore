@@ -13,6 +13,8 @@ docs/*
 dev/
 .env
 ..bfg-report/**/*
+.DS_Store
+
 
 # IDE
 .vscode/

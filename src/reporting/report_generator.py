@@ -127,12 +127,33 @@ def extract_report_data_from_taxman(taxman_instance) -> ReportData:
     """
     report_data = ReportData()
     
-    # Extract tax events
-    report_data.sell_events = getattr(taxman_instance, 'sell_events', [])
-    report_data.interest_events = getattr(taxman_instance, 'interest_events', [])
-    report_data.transfer_events = getattr(taxman_instance, 'transfer_events', [])
-    report_data.misc_events = getattr(taxman_instance, 'misc_events', [])
-    report_data.unrealized_events = getattr(taxman_instance, 'unrealized_events', [])
+    # Extract tax events from tax_report_entries (how the old system works)
+    tax_report_entries = getattr(taxman_instance, 'tax_report_entries', [])
+    print(f"🔍 Found {len(tax_report_entries)} tax report entries")
+    
+    if tax_report_entries:
+        # Group events by type (like the old system does)
+        from misc import group_by
+        import transaction as tr
+        
+        grouped_events = group_by(tax_report_entries, "event_type")
+        print(f"🔍 Event types found: {list(grouped_events.keys())}")
+        
+        # Extract events by type
+        report_data.sell_events = grouped_events.get('Verkauf', [])
+        report_data.interest_events = grouped_events.get('Coin-Lending Einkünfte', []) + grouped_events.get('Staking Einkünfte', [])
+        report_data.misc_events = grouped_events.get('Airdrops', []) + grouped_events.get('Belohnungen-Bonus', [])
+        report_data.transfer_events = grouped_events.get('Ein-&Auszahlungen', [])
+        report_data.unrealized_events = grouped_events.get('Unrealized', [])  # If exists
+        
+        print(f"🔍 Grouped events: sell={len(report_data.sell_events)}, interest={len(report_data.interest_events)}, misc={len(report_data.misc_events)}")
+    else:
+        # Fallback: try direct attributes (shouldn't happen)
+        report_data.sell_events = getattr(taxman_instance, 'sell_events', [])
+        report_data.interest_events = getattr(taxman_instance, 'interest_events', [])
+        report_data.transfer_events = getattr(taxman_instance, 'transfer_events', [])
+        report_data.misc_events = getattr(taxman_instance, 'misc_events', [])
+        report_data.unrealized_events = getattr(taxman_instance, 'unrealized_events', [])
     
     # Extract summary data
     report_data.taxable_amount = getattr(taxman_instance, 'taxable_amount', 0.0)

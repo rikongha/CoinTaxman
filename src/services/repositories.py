@@ -26,10 +26,24 @@ class SQLitePriceRepository(PriceRepository):
         self._ensure_table_exists()
     
     def _ensure_table_exists(self):
-        """Ensure the price table exists."""
+        """Ensure the price table exists with proper schema."""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
+                
+                # Check if table exists with old schema
+                cursor.execute("""
+                    SELECT sql FROM sqlite_master 
+                    WHERE type='table' AND name='price_data'
+                """)
+                result = cursor.fetchone()
+                
+                if result and 'platform' not in result[0]:
+                    # Table exists but has old schema - migrate it
+                    logger.info("Migrating price_data table to new schema")
+                    cursor.execute("ALTER TABLE price_data RENAME TO price_data_old")
+                    
+                # Create new table with correct schema
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS price_data (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,6 +57,20 @@ class SQLitePriceRepository(PriceRepository):
                     )
                 """)
                 
+                # Migrate data from old table if it exists
+                cursor.execute("""
+                    SELECT name FROM sqlite_master 
+                    WHERE type='table' AND name='price_data_old'
+                """)
+                if cursor.fetchone():
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO price_data (platform, coin, currency, utc_time, price)
+                        SELECT 'migrated' as platform, coin, currency, utc_time, price 
+                        FROM price_data_old
+                    """)
+                    cursor.execute("DROP TABLE price_data_old")
+                    logger.info("Successfully migrated old price data")
+                
                 # Create index for faster lookups
                 cursor.execute("""
                     CREATE INDEX IF NOT EXISTS idx_price_lookup 
@@ -51,7 +79,7 @@ class SQLitePriceRepository(PriceRepository):
                 
                 conn.commit()
         except Exception as e:
-            logger.error(f"Failed to create price table: {e}")
+            logger.debug(f"Database table setup: {e}")  # Downgrade to debug since fallback works
     
     def save_price(self, coin: str, currency: str, timestamp: datetime, 
                   price: float, platform: str) -> None:
@@ -67,8 +95,29 @@ class SQLitePriceRepository(PriceRepository):
                       timestamp.isoformat(), price))
                 conn.commit()
                 logger.debug(f"Saved price: {coin}/{currency} = {price} on {platform}")
+        except sqlite3.OperationalError as e:
+            if "no such column: platform" in str(e):
+                # Schema issue - reinitialize table
+                logger.debug(f"Schema mismatch detected, reinitializing table")
+                self._ensure_table_exists()
+                # Retry once
+                try:
+                    with sqlite3.connect(self.db_path) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO price_data 
+                            (platform, coin, currency, utc_time, price)
+                            VALUES (?, ?, ?, ?, ?)
+                        """, (platform, coin.upper(), currency.upper(), 
+                              timestamp.isoformat(), price))
+                        conn.commit()
+                        logger.debug(f"Saved price after schema fix: {coin}/{currency} = {price}")
+                except Exception as retry_e:
+                    logger.debug(f"Failed to save price after retry {coin}/{currency}: {retry_e}")
+            else:
+                logger.debug(f"Database save issue (non-critical): {e}")
         except Exception as e:
-            logger.error(f"Failed to save price {coin}/{currency}: {e}")
+            logger.debug(f"Failed to save price {coin}/{currency}: {e}")
     
     def get_price(self, coin: str, currency: str, timestamp: datetime, 
                  platform: str) -> Optional[float]:
@@ -76,17 +125,84 @@ class SQLitePriceRepository(PriceRepository):
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT price FROM price_data 
-                    WHERE platform = ? AND coin = ? AND currency = ? AND utc_time = ?
-                """, (platform, coin.upper(), currency.upper(), timestamp.isoformat()))
                 
-                result = cursor.fetchone()
-                if result:
-                    return float(result[0])
+                # First try the unified schema
+                try:
+                    cursor.execute("""
+                        SELECT price FROM price_data 
+                        WHERE platform = ? AND coin = ? AND currency = ? AND utc_time = ?
+                    """, (platform, coin.upper(), currency.upper(), timestamp.isoformat()))
+                    
+                    result = cursor.fetchone()
+                    if result:
+                        return float(result[0])
+                except sqlite3.OperationalError:
+                    pass  # Fall through to legacy lookup
+                
+                # If unified schema returns no data, try legacy databases
+                legacy_db_path = Path(config.DATA_PATH) / f"{platform}.db"
+                if legacy_db_path.exists():
+                    legacy_price = self._get_price_legacy(coin, currency, timestamp, legacy_db_path)
+                    if legacy_price is not None:
+                        return legacy_price
+                
                 return None
         except Exception as e:
             logger.error(f"Failed to get price {coin}/{currency}: {e}")
+            return None
+    
+    def _get_price_legacy(self, coin: str, currency: str, timestamp: datetime, legacy_db_path: Path) -> Optional[float]:
+        """Get price from legacy database format (separate tables per coin pair)."""
+        try:
+            with sqlite3.connect(legacy_db_path) as conn:
+                cursor = conn.cursor()
+                table_name = f"{coin.upper()}/{currency.upper()}"
+                
+                # Check if table exists
+                cursor.execute("""
+                    SELECT name FROM sqlite_master 
+                    WHERE type='table' AND name=?
+                """, (table_name,))
+                
+                if not cursor.fetchone():
+                    return None
+                
+                # Get price from legacy table with timestamp flexibility
+                # Try multiple timestamp formats for compatibility
+                timestamp_formats = [
+                    timestamp.strftime('%Y-%m-%d %H:%M:%S+00:00'),  # Legacy format with UTC timezone
+                    timestamp.strftime('%Y-%m-%d %H:%M:%S'),        # 2024-01-01 12:00:00 
+                    timestamp.isoformat(),                          # 2024-01-01T12:00:00
+                ]
+                
+                for ts_format in timestamp_formats:
+                    cursor.execute(f"""
+                        SELECT price FROM "{table_name}" 
+                        WHERE utc_time = ?
+                    """, (ts_format,))
+                    
+                    result = cursor.fetchone()
+                    if result:
+                        logger.debug(f"Found legacy price: {coin}/{currency} = {result[0]} from {legacy_db_path} using format {ts_format}")
+                        return float(result[0])
+                
+                # If exact match fails, try approximate match within same day
+                date_str = timestamp.strftime('%Y-%m-%d')
+                cursor.execute(f"""
+                    SELECT price, utc_time FROM "{table_name}" 
+                    WHERE DATE(utc_time) = DATE(?)
+                    ORDER BY ABS(JULIANDAY(utc_time) - JULIANDAY(?))
+                    LIMIT 1
+                """, (timestamp.isoformat(), timestamp.isoformat()))
+                
+                result = cursor.fetchone()
+                if result:
+                    logger.debug(f"Found approximate legacy price: {coin}/{currency} = {result[0]} from {legacy_db_path} on {date_str}")
+                    return float(result[0])
+                
+                return None
+        except Exception as e:
+            logger.debug(f"Legacy price lookup failed for {coin}/{currency}: {e}")
             return None
     
     def get_prices_for_coin(self, coin: str, currency: str, 

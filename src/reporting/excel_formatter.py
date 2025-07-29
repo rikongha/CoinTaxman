@@ -155,11 +155,31 @@ class ExcelWorksheetHelper:
         self.current_row += 1  # Add spacing
         return self.current_row
     
+    def write_title(self, title: str) -> int:
+        """Write a main title for the sheet."""
+        self.worksheet.merge_range(
+            self.current_row, 0, self.current_row, 3,
+            title, self.formats.header_format
+        )
+        self.current_row += 2  # Add extra spacing after title
+        return self.current_row
+    
+    def write_section_header(self, header: str) -> int:
+        """Write a section header."""
+        self.worksheet.write(self.current_row, 0, header, self.formats.bold_format)
+        self.current_row += 1
+        return self.current_row
+    
+    def add_blank_row(self) -> int:
+        """Add a blank row for spacing."""
+        self.current_row += 1
+        return self.current_row
+    
     def auto_fit_columns(self, max_width: int = 50):
         """Auto-fit column widths (approximate, as xlsxwriter doesn't support true auto-fit)."""
         # This is a simplified version - real implementation would calculate based on content
         for col in range(20):  # Adjust based on expected number of columns
-            self.worksheet.set_column(col, col, min(max_width, 15))
+            self.worksheet.set_column(col, col, min(max_width, 60))  # Increased from 15 to 60 for German text
 
 
 class ExcelLayoutManager:

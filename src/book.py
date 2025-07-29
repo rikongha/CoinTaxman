@@ -28,6 +28,7 @@ import log_config
 import misc
 import transaction as tr
 from readers.kraken import kraken_asset_map
+from readers import bybit, binance
 from database import set_price_db
 from price_data import PriceData
 
@@ -118,174 +119,10 @@ class Book:
             self._append_operation(op)
 
     def _read_binance(self, file_path: Path, version: int = 1) -> None:
-        platform = "binance"
-        operation_mapping = {
-            "Distribution": "Airdrop",
-            "Cash Voucher distribution": "Airdrop",
-            "Cashback Voucher": "Airdrop",
-            "Rewards Distribution": "Airdrop",
-            "Simple Earn Flexible Airdrop": "Airdrop",
-            "Airdrop Assets": "Airdrop",
-            "Crypto Box": "Airdrop",
-            "Launchpool Airdrop": "Airdrop",
-            "Megadrop Rewards": "Airdrop",
-            #
-            "Savings Interest": "CoinLendInterest",
-            "Savings purchase": "CoinLend",
-            "Savings Principal redemption": "CoinLendEnd",
-            "Savings distribution": "CoinLendInterest",
-            "Simple Earn Flexible Subscription": "CoinLend",
-            "Simple Earn Flexible Redemption": "CoinLendEnd",
-            "Simple Earn Flexible Interest": "CoinLendInterest",
-            "Simple Earn Locked Subscription": "CoinLend",
-            "Simple Earn Locked Redemption": "CoinLendEnd",
-            "Simple Earn Locked Rewards": "CoinLendInterest",
-            "Savings Distribution": "CoinLendInterest",
-            #
-            "BNB Vault Rewards": "CoinLendInterest",
-            "Launchpool Earnings Withdrawal": "CoinLendInterest",
-            #
-            "Commission History": "Commission",
-            "Commission Fee Shared With You": "Commission",
-            "Referrer rebates": "Commission",
-            "Referral Kickback": "Commission",
-            "Commission Rebate": "Commission",
-            # DeFi yield farming
-            "Liquid Swap add": "CoinLend",
-            "Liquid Swap remove": "CoinLendEnd",
-            "Liquid Swap rewards": "CoinLendInterest",
-            "Launchpool Interest": "CoinLendInterest",
-            #
-            "Super BNB Mining": "StakingInterest",
-            "POS savings interest": "StakingInterest",
-            "POS savings purchase": "Staking",
-            "POS savings redemption": "StakingEnd",
-            "ETH 2.0 Staking Rewards": "StakingInterest",
-            "Staking Purchase": "Staking",
-            "Staking Rewards": "StakingInterest",
-            "Staking Redemption": "StakingEnd",
-            #
-            "Fiat Deposit": "Deposit",
-            "Fiat Withdraw": "Withdrawal",
-            "Withdraw": "Withdrawal",
-            #
-            "Transaction Buy": "Buy",
-            "Transaction Spend": "Sell",
-            "Transaction Revenue": "Buy",
-            "Transaction Sold": "Sell",
-            "Transaction Fee": "Fee",
-            "Asset Recovery": "Sell",
-        }
-
-        with open(file_path, encoding="utf8") as f:
-            reader = csv.reader(f)
-
-            # Skip header.
-            next(reader)
-
-            for rowlist in reader:
-                if version == 1:
-                    _utc_time, account, operation, coin, _change, remark = rowlist
-                elif version == 2:
-                    (
-                        _,
-                        _utc_time,
-                        account,
-                        operation,
-                        coin,
-                        _change,
-                        remark,
-                    ) = rowlist
-                else:
-                    log.error("File version not Supported " + str(file_path))
-                    raise NotImplementedError
-
-                row = reader.line_num
-
-                # Parse data.
-                utc_time = datetime.datetime.strptime(_utc_time, "%Y-%m-%d %H:%M:%S")
-                utc_time = utc_time.replace(tzinfo=datetime.timezone.utc)
-                change = misc.force_decimal(_change)
-                operation = operation_mapping.get(operation, operation)
-                if operation in (
-                    "The Easiest Way to Trade",
-                    "Small assets exchange BNB",
-                    "Small Assets Exchange BNB",
-                    "Transaction Related",
-                    "Large OTC trading",
-                    "Sell",
-                    "Buy",
-                    "Binance Convert",
-                ):
-                    operation = "Sell" if change < 0 else "Buy"
-
-                if operation == "Liquid Swap add/sell":
-                    operation = "CoinLendEnd" if change < 0 else "CoinLend"
-
-                if operation == "Commission" and account != "Spot":
-                    # All comissions will be handled the same way.
-                    # As of now, only Spot Binance Operations are supported,
-                    # so we have to change the account type to Spot.
-                    account = "Spot"
-
-                if (
-                    account in ("Spot", "P2P")
-                    and operation
-                    in (
-                        "transfer_in",
-                        "transfer_out",
-                    )
-                    or (
-                        account in ("Spot", "Funding")
-                        and operation == "Transfer Between Main and Funding Wallet"
-                    )
-                ):
-                    # Ignore transfers
-                    continue
-
-                change = abs(change)
-
-                # Validate data.
-                supported_account_types = ("Spot", "Savings", "Earn", "Funding")
-                assert account in supported_account_types, (
-                    f"Other types than {supported_account_types} are currently "
-                    f"not supported.  Given account type is `{account}`. "
-                    "Please create an Issue or PR."
-                )
-                assert operation
-                assert coin
-                assert change
-
-                if remark:
-                    # Ignore default remarks
-                    if remark in (
-                        "Withdraw fee is included",
-                        "Binance Earn",
-                        "Binance Pay",
-                        "Binance Launchpool",
-                    ) or remark.endswith(" to BNB"):
-                        remark = ""
-
-                    # Do not warn for specific remarks
-                    elif remark.startswith("Korrekturbuchung."):
-                        pass
-
-                    # Warn on other binance remarks, becuase all remarks should be some
-                    # unnecessary default text which we'd like to ignore
-                    else:
-                        log.warning(
-                            "I may have missed a remark in %s:%i: `%s`.",
-                            file_path,
-                            row,
-                            remark,
-                        )
-
-                self.append_operation(
-                    operation, utc_time, platform, change, coin, row, file_path, remark
-                )
+        binance.read_binance(self, file_path, version)
 
     def _read_binance_v2(self, file_path: Path) -> None:
-        self._read_binance(file_path=file_path, version=2)
+        binance.read_binance_v2(self, file_path)
 
     def _read_coinbase(self, file_path: Path, version: int = 1) -> None:
         platform = "coinbase"
@@ -679,8 +516,24 @@ class Book:
             for columns in reader:
 
                 num_columns = len(columns)
+                # Kraken ledgers export format with wallet column (current format)
+                if num_columns == 11:
+                    (
+                        txid,
+                        refid,
+                        _utc_time,
+                        _type,
+                        subtype,
+                        aclass,
+                        _asset,
+                        wallet,
+                        _amount,
+                        _fee,
+                        balance,
+                    ) = columns
+
                 # Kraken ledgers export format from October 2020 and ongoing
-                if num_columns == 10:
+                elif num_columns == 10:
                     (
                         txid,
                         refid,
@@ -1354,6 +1207,18 @@ class Book:
                             overwrite=True,
                         )
 
+    def _read_bybit(self, file_path: Path) -> None:
+        """Read Bybit AssetChangeDetails CSV file."""
+        bybit.read_bybit(self, file_path)
+
+    def _read_bybit_uta(self, file_path: Path) -> None:
+        """Read Bybit UTA (Unified Trading Account) CSV file."""
+        bybit.read_bybit_uta(self, file_path)
+
+    def _read_bybit_withdraw_deposit(self, file_path: Path) -> None:
+        """Read Bybit withdrawal/deposit specific CSV file."""
+        bybit.read_bybit_withdraw_deposit(self, file_path)
+
     def detect_exchange(self, file_path: Path) -> Optional[str]:
         if file_path.suffix == ".csv":
 
@@ -1371,6 +1236,9 @@ class Book:
                 "bitpanda_pro_trades": 4,
                 "bitpanda": 7,
                 "custom_eur": 1,
+                "bybit": 2,
+                "bybit_uta": 2,
+                "bybit_withdraw_deposit": 2,
             }
 
             expected_headers = {
@@ -1457,6 +1325,7 @@ class Book:
                     "subtype",
                     "aclass",
                     "asset",
+                    "wallet",
                     "amount",
                     "fee",
                     "balance",
@@ -1521,6 +1390,43 @@ class Book:
                     "Wallet",
                     "Timestamp UTC",
                     "Note",
+                ],
+                "bybit": [
+                    "Uid",
+                    "Date & Time(UTC)",
+                    "Coin",
+                    "QTY",
+                    "Type",
+                    "Account Balance",
+                    "Description",
+                ],
+                "bybit_uta": [
+                    "Uid",
+                    "Currency",
+                    "Contract",
+                    "Type",
+                    "Direction",
+                    "Quantity",
+                    "Position",
+                    "Filled Price",
+                    "Funding",
+                    "Fee Paid",
+                    "Cash Flow",
+                    "Change",
+                    "Wallet Balance",
+                    "Action",
+                    "Time(UTC)",
+                ],
+                "bybit_withdraw_deposit": [
+                    "Uid",
+                    "Date",
+                    "Type",
+                    "Asset",
+                    "Chain",
+                    "Amount",
+                    "Tx ID",
+                    "Status",
+                    "Received Address",
                 ],
             }
             with open(file_path, encoding="utf8") as f:
@@ -1664,6 +1570,10 @@ class Book:
                 assert isinstance(timestamp, datetime.datetime)
                 assert isinstance(buytr, tr.Buy)
                 assert isinstance(selltr, tr.Sell)
+
+                # Skip if buying and selling the same coin (invalid price calculation)
+                if buytr.coin == selltr.coin:
+                    continue
 
                 # Price definition example for buying BTC with EUR:
                 # Symbol: BTCEUR
@@ -1893,7 +1803,11 @@ class Book:
                         assert isinstance(sell_op, tr.Sell)
                         assert sell_op.link is None
                         assert sell_op.selling_value is None
-                        percent = buying_cost / buy_op.buying_cost
+                        if buy_op.buying_cost == 0:
+                            log.warning(f"Buy operation has zero cost, setting percent to 0 for German tax compliance")
+                            percent = decimal.Decimal('0')
+                        else:
+                            percent = buying_cost / buy_op.buying_cost
                         sell_op.selling_value = self.price_data.get_partial_cost(
                             buy_op, percent
                         )
@@ -1945,13 +1859,15 @@ class Book:
         file_paths: list[Path] = []
 
         if statements_dir.is_dir():
-            for file_path in statements_dir.iterdir():
-                # Ignore .gitkeep and temporary excel files.
+            for file_path in statements_dir.rglob("*"):
+                # Ignore .gitkeep, .DS_Store and temporary excel files.
                 filename = file_path.stem
-                if filename == ".gitkeep" or filename.startswith("~$"):
+                if filename == ".gitkeep" or filename.startswith("~$") or file_path.name == ".DS_Store":
                     continue
-
-                file_paths.append(file_path)
+                
+                # Only add files, not directories
+                if file_path.is_file():
+                    file_paths.append(file_path)
         return file_paths
 
     def read_files(self) -> bool:

@@ -6,6 +6,7 @@ necessary dependencies.
 """
 
 import logging
+import os
 from typing import List, Optional
 
 from interfaces.price_service import PriceService, PriceAPI
@@ -48,27 +49,68 @@ class PriceServiceFactory:
         # Create USDT converter
         usdt_converter = USDTEURConverter()
         
-        # Create external APIs in order of preference
+        # Create EXCHANGE APIs only (direct from exchanges)
         apis: List[PriceAPI] = []
         
-        # CoinGecko is primary for historical data
-        apis.append(CoinGeckoAPI(api_key=coingecko_api_key))
+        # Add direct exchange APIs (highest priority for real-time prices)
+        try:
+            # Load .env file if it exists (for development)
+            # Try multiple possible locations for .env file
+            possible_env_paths = [
+                os.path.join(os.getcwd(), '.env'),  # Current working directory
+                os.path.join(os.path.dirname(__file__), '..', '..', '.env'),  # Relative to this file
+                '.env'  # Simple relative path
+            ]
+            
+            for env_file in possible_env_paths:
+                if os.path.exists(env_file):
+                    try:
+                        with open(env_file, 'r') as f:
+                            for line in f:
+                                if line.strip() and not line.startswith('#'):
+                                    if '=' in line:
+                                        key, value = line.strip().split('=', 1)
+                                        os.environ.setdefault(key, value)
+                        logger.debug(f"Loaded environment from {env_file}")
+                        break
+                    except Exception as e:
+                        logger.debug(f"Could not load .env file from {env_file}: {e}")
+            
+            # Auto-detect Binance API keys from environment if not provided
+            if not binance_api_key:
+                binance_api_key = os.getenv('BINANCE_API_KEY')
+            if not binance_secret:
+                binance_secret = os.getenv('BINANCE_API_SECRET')
+            
+            # Binance API with keys for higher rate limits
+            if binance_api_key and binance_secret:
+                apis.append(BinanceAPI(api_key=binance_api_key, secret_key=binance_secret))
+                logger.info("✅ Added Binance exchange API with authentication (higher rate limits)")
+            else:
+                # Fallback to public API
+                apis.append(BinanceAPI())
+                logger.info("✅ Added Binance public exchange API (rate limited)")
+            
+            # TODO: Add other exchange APIs here
+            # - Kraken Public API (for European users)
+            # - Bybit Public API (for derivatives)
+            # - Coinbase Public API
+            # These should all be EXCHANGE APIs, not aggregators
+            
+        except Exception as e:
+            logger.warning(f"Failed to initialize exchange APIs: {e}")
         
-        # CryptoCompare as secondary
-        apis.append(CryptoCompareAPI(api_key=cryptocompare_api_key))
-        
-        # Binance for current prices (if API keys provided)
-        if binance_api_key and binance_secret:
-            apis.append(BinanceAPI(api_key=binance_api_key, secret_key=binance_secret))
+        # NOTE: CryptoCompare and CoinGecko are handled separately in the price service
+        # as fallback strategies, NOT as primary exchange APIs
         
         # Wrap in fallback API for robustness
-        fallback_api = FallbackPriceAPI(apis)
+        fallback_api = FallbackPriceAPI(apis) if apis else None
         
         # Create the unified service
         service = ConsolidatedPriceService(
             cache=cache,
             repository=repository,
-            apis=[fallback_api],
+            apis=[fallback_api] if fallback_api else [],
             usdt_converter=usdt_converter
         )
         

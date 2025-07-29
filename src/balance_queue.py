@@ -18,11 +18,13 @@ import abc
 import collections
 import dataclasses
 import decimal
+import datetime
 from typing import Union
 
 import config
 import log_config
 import transaction as tr
+from balance_management.balance_config import MissingAcquisitionHandling
 
 log = log_config.getLogger(__name__)
 
@@ -46,8 +48,9 @@ class BalancedOperation:
 
 
 class BalanceQueue(abc.ABC):
-    def __init__(self, coin: str) -> None:
+    def __init__(self, coin: str, missing_acquisition_handling: MissingAcquisitionHandling = MissingAcquisitionHandling.ERROR) -> None:
         self.coin = coin
+        self.missing_acquisition_handling = missing_acquisition_handling
         self.queue: collections.deque[BalancedOperation] = collections.deque()
         # It might happen, that the exchange takes fees before the buy/sell-
         # transaction. Keep fees, which couldn't be removed directly from the
@@ -195,6 +198,12 @@ class BalanceQueue(abc.ABC):
         """
         assert op.coin == self.coin
         sold_coins, unsold_change = self._remove(op.change)
+        
+        # Validate total sold amount doesn't exceed operation amount
+        total_sold = sum(sc.sold for sc in sold_coins)
+        if total_sold > op.change:
+            log.error(f"Internal error: total sold {total_sold} exceeds operation amount {op.change}")
+            raise RuntimeError("Balance accounting error")
 
         if unsold_change:
             # Queue ran out of items to sell and not all coins could be sold.
@@ -202,12 +211,9 @@ class BalanceQueue(abc.ABC):
                 f"Not enough {op.coin} in queue to sell: "
                 f"missing {unsold_change} {op.coin} "
                 f"(transaction from {op.utc_time} on {op.platform}, "
-                f"see {op.file_path.name} lines {op.line})\n"
-                f"This can happen when you sold more {op.coin} than you have "
-                "according to your account statements. Have you added every "
-                "account statement including these from last years and the "
-                f"all deposits of {op.coin}?"
+                f"see {op.file_path.name} lines {op.line})"
             )
+            
             if self.coin == config.FIAT:
                 log.warning(
                     f"{msg}\n"
@@ -216,15 +222,104 @@ class BalanceQueue(abc.ABC):
                     "deadline will be wrong."
                 )
             else:
-                log.error(
-                    f"{msg}\n"
-                    "\tThis error may also occur after deposits from unknown "
-                    "sources. CoinTaxman requires the full transaction history to "
-                    "evaluate taxation (when and where were these deposited coins "
-                    "bought?).\n"
-                )
-                raise RuntimeError
+                # Handle missing acquisitions according to German tax compliance
+                if self.missing_acquisition_handling == MissingAcquisitionHandling.ERROR:
+                    log.error(
+                        f"{msg}\n"
+                        f"This can happen when you sold more {op.coin} than you have "
+                        "according to your account statements. Have you added every "
+                        "account statement including these from last years and the "
+                        f"all deposits of {op.coin}?\n"
+                        "\tThis error may also occur after deposits from unknown "
+                        "sources. CoinTaxman requires the full transaction history to "
+                        "evaluate taxation (when and where were these deposited coins "
+                        "bought?).\n"
+                    )
+                    raise RuntimeError
+                    
+                elif self.missing_acquisition_handling == MissingAcquisitionHandling.ZERO_COST:
+                    # German tax compliant: Create synthetic €0 cost basis acquisition
+                    # This represents airdrops without consideration or hard fork rewards
+                    log.warning(
+                        f"{msg}\n"
+                        f"German tax compliance: Creating synthetic €0 cost basis acquisition "
+                        f"for missing {unsold_change} {op.coin}. This assumes the missing coins "
+                        f"came from airdrops without consideration or hard forks (per § 22 Nr. 3 EStG).\n"
+                        f"If this is incorrect, please add the missing acquisition transactions."
+                    )
+                    
+                    # Create synthetic acquisition one second before the sale to maintain FIFO order
+                    # Use the same platform as the sale to avoid price lookup issues
+                    synthetic_time = op.utc_time - datetime.timedelta(seconds=1)
+                    synthetic_acquisition = tr.Buy(
+                        utc_time=synthetic_time,
+                        platform=op.platform,  # Use same platform as the sale
+                        change=unsold_change,
+                        coin=op.coin,
+                        line=[],
+                        file_path=op.file_path,
+                        fees=None,
+                        remarks=["Synthetic €0 cost basis acquisition for German tax compliance - assumed airdrop/fork"]
+                    )
+                    
+                    # Add synthetic acquisition to queue and try removal again
+                    self.add(synthetic_acquisition)
+                    additional_sold_coins, remaining_unsold = self._remove(unsold_change)
+                    
+                    # Only add the additional coins if they don't exceed the missing amount
+                    # This prevents assertion errors in tax calculation
+                    total_additional = sum(sc.sold for sc in additional_sold_coins)
+                    if total_additional <= unsold_change:
+                        sold_coins.extend(additional_sold_coins)
+                    else:
+                        # Adjust the sold amounts to match exactly the missing amount
+                        remaining_to_allocate = unsold_change
+                        for sc in additional_sold_coins:
+                            if remaining_to_allocate <= 0:
+                                break
+                            if sc.sold <= remaining_to_allocate:
+                                sold_coins.append(sc)
+                                remaining_to_allocate -= sc.sold
+                            else:
+                                # Create adjusted sold coin for partial amount
+                                adjusted_sc = tr.SoldCoin(
+                                    op=sc.op,
+                                    sold=remaining_to_allocate
+                                )
+                                sold_coins.append(adjusted_sc)
+                                remaining_to_allocate = decimal.Decimal('0')
+                    
+                    if remaining_unsold:
+                        log.error(f"Failed to create sufficient synthetic acquisition for {op.coin}")
+                        raise RuntimeError
+                        
+                elif self.missing_acquisition_handling == MissingAcquisitionHandling.WARNING:
+                    log.warning(
+                        f"{msg}\n"
+                        f"Continuing with partial sale. Missing {unsold_change} {op.coin} "
+                        f"will not be included in tax calculation."
+                    )
 
+        # Final validation: ensure total sold amount never exceeds operation amount
+        final_total_sold = sum(sc.sold for sc in sold_coins)
+        if final_total_sold > op.change:
+            log.error(f"Final validation failed: total sold {final_total_sold} exceeds operation amount {op.change}")
+            # Truncate sold_coins to match operation amount exactly
+            remaining_amount = op.change
+            truncated_sold_coins = []
+            for sc in sold_coins:
+                if remaining_amount <= 0:
+                    break
+                if sc.sold <= remaining_amount:
+                    truncated_sold_coins.append(sc)
+                    remaining_amount -= sc.sold
+                else:
+                    # Create truncated sold coin
+                    truncated_sc = tr.SoldCoin(op=sc.op, sold=remaining_amount)
+                    truncated_sold_coins.append(truncated_sc)
+                    remaining_amount = decimal.Decimal('0')
+            sold_coins = truncated_sold_coins
+            
         return sold_coins
 
     def _remove_fee(self, fee: decimal.Decimal) -> None:

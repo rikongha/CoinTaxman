@@ -50,7 +50,7 @@ class BalanceManager:
         key = BalanceKey.create(platform, coin, self._config.depot_mode)
         
         if key not in self._balances:
-            self._balances[key] = self._BalanceType(coin)
+            self._balances[key] = self._BalanceType(coin, self._config.missing_acquisition_handling)
         
         return self._balances[key]
     

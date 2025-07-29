@@ -55,7 +55,8 @@ class USDTEURConverter:
                                 
                         if date_obj:
                             rate = float(row['Close'])
-                            self.rates[date_obj] = rate
+                            # Store by date only, not datetime (for easier lookup)
+                            self.rates[date_obj.date()] = rate
                         else:
                             # Skip logging for non-critical parsing failures
                             continue
