@@ -823,13 +823,16 @@ class AirdropReportEntry(TaxReportEntry):
         taxation_type: str,
         remark: str,
     ) -> None:
+        # Airdrops classified as "Schenkung" (gifts) are not taxable under German tax law
+        is_taxable = taxation_type != "Schenkung"
+        
         super().__init__(
             first_platform=platform,
             amount=amount,
             coin=coin,
             first_utc_time=utc_time,
             first_value_in_fiat=in_fiat,
-            is_taxable=True,
+            is_taxable=is_taxable,
             taxation_type=taxation_type,
             remark=remark,
         )

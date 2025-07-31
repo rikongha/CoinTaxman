@@ -193,10 +193,11 @@ class PriceData:
         quote_asset: str,
         fallback_mode: bool = False,
     ) -> decimal.Decimal:
-        """Retrieve price from Bybit using CoinGecko or external sources.
+        """Retrieve price from Bybit using external price sources.
         
         Since Bybit doesn't provide historical price API access like Binance,
-        we fall back to external price sources for German tax compliance.
+        we use the unified price service which includes multiple fallbacks:
+        CoinGecko, CryptoCompare, and Binance API for cross-reference.
         
         Args:
             base_asset (str): The coin to get price for
@@ -207,17 +208,49 @@ class PriceData:
         Returns:
             decimal.Decimal: The price in quote_asset
         """
-        # For German tax compliance, we can use external price sources
-        # when exchange-specific APIs are not available
+        # Use the unified price service for Bybit transactions
+        if self._cache_service is None:
+            from services.price_service_factory import PriceServiceFactory
+            self.__class__._cache_service = PriceServiceFactory.create_production_service()
         
-        # Try to get price from historical data files if available
+        from interfaces.price_service import PriceRequest
+        request = PriceRequest(
+            coin=base_asset,
+            currency=quote_asset,
+            timestamp=utc_time,
+            platform="bybit"
+        )
+        
         try:
-            # Check if we have historical price data files for this coin
-            return self._get_price_from_historical_files(base_asset, utc_time, quote_asset)
-        except:
-            if not fallback_mode:
-                log.warning(f"No Bybit price data available for {base_asset}/{quote_asset} at {utc_time}. Using €0 (German tax compliant fallback).")
-            return decimal.Decimal('0')
+            price_result = self._cache_service.get_price(request)
+            if price_result and price_result.value > 0:
+                return price_result.value
+        except Exception as e:
+            log.debug(f"Unified price service failed for Bybit {base_asset}/{quote_asset}: {e}")
+        
+        # If unified service fails, try fallback to other exchanges via unified service
+        # Try with different platform to get cross-platform price data
+        for fallback_platform in ["binance", "coingecko", "cryptocompare"]:
+            try:
+                fallback_request = PriceRequest(
+                    coin=base_asset,
+                    currency=quote_asset,
+                    timestamp=utc_time,
+                    platform=fallback_platform
+                )
+                price_result = self._cache_service.get_price(fallback_request)
+                if price_result and price_result.value > 0:
+                    log.info(f"Using {fallback_platform} fallback for Bybit {base_asset}/{quote_asset}")
+                    return price_result.value
+            except Exception as e:
+                log.debug(f"{fallback_platform} fallback failed: {e}")
+                continue
+        
+        if not fallback_mode:
+            log.warning(f"All price sources failed for {base_asset}/{quote_asset} at {utc_time}. This will affect tax calculations.")
+        
+        # Return 0 only as absolute last resort
+        return decimal.Decimal('0')
     
     def _get_price_from_historical_files(
         self,

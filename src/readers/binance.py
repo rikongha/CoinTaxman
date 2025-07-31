@@ -151,7 +151,6 @@ def read_binance(book: "Book", file_path: Path, version: int = 1) -> None:
                 "Sell",
                 "Buy",
                 "Binance Convert",
-                "P2P Trading",
                 "Send/Recieve",
                 "Payment",
                 "Token Swap - Redenomination/Rebranding",

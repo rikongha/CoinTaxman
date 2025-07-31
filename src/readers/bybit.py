@@ -82,18 +82,27 @@ def read_bybit(book: "Book", file_path: Path) -> None:
             if qty == 0:
                 continue
             
-            # Map operation type
-            operation = operation_mapping.get(operation_type)
-            if not operation:
-                # Handle unknown operation types
+            # Handle special cases based on quantity sign before mapping
+            if operation_type == "Earn":
+                # Positive = staking reward (taxable income)
+                # Negative = unstaking (getting staked coins back, not taxable)
                 if qty > 0:
-                    operation = "Buy"
+                    operation = "StakingInterest"
                 else:
-                    operation = "Sell"
-            
-            # For trading operations, determine buy/sell from quantity sign
-            if operation_type == "Trading":
+                    # Negative Earn = unstaking, treat as deposit (getting your coins back)
+                    operation = "Deposit"
+            elif operation_type == "Trading":
+                # For trading operations, determine buy/sell from quantity sign
                 operation = "Buy" if qty > 0 else "Sell"
+            else:
+                # Map other operation types normally
+                operation = operation_mapping.get(operation_type)
+                if not operation:
+                    # Handle unknown operation types
+                    if qty > 0:
+                        operation = "Buy"
+                    else:
+                        operation = "Sell"
             
             # Use absolute quantity
             qty = abs(qty)

@@ -76,6 +76,12 @@ class ConsolidatedPriceService(PriceService):
     def get_price(self, request: PriceRequest) -> Optional[Price]:
         """Main price lookup method with optimized fallback chain."""
         
+        # Get swap ratio before normalization
+        original_coin = request.coin.upper()
+        date = request.timestamp.date()
+        from services.symbol_mappings import symbol_manager
+        mapped_symbol, swap_ratio = symbol_manager.get_symbol_mapping(original_coin, date)
+        
         # Normalize the request
         normalized_request = self._normalize_request(request)
         lookup_key = self._get_lookup_key(normalized_request)
@@ -90,13 +96,17 @@ class ConsolidatedPriceService(PriceService):
                 price = self.cache.get(normalized_request)
                 if price and price.value > 0:
                     logger.debug(f"✅ Cache hit: {normalized_request.coin}/{normalized_request.currency} from cache")
-                    return price
+                    # Apply swap ratio adjustment if needed
+                    adjusted_price = self._apply_swap_ratio_adjustment(price, original_coin, swap_ratio)
+                    return adjusted_price
             
             # Strategy 2: Check legacy databases (existing cached data)
             price = self._get_from_repository(normalized_request)
             if price:
                 self.cache.set(price)
-                return price
+                # Apply swap ratio adjustment if needed
+                adjusted_price = self._apply_swap_ratio_adjustment(price, original_coin, swap_ratio)
+                return adjusted_price
             
             # Strategy 2.5: Check historical CSV files (coingecko data)
             price = self._get_from_historical_csv(normalized_request)
@@ -240,6 +250,25 @@ class ConsolidatedPriceService(PriceService):
             logger.debug(f"Symbol {coin} has swap ratio {swap_ratio} - price adjustment may be needed")
         
         return mapped_symbol
+    
+    def _apply_swap_ratio_adjustment(self, price: Price, original_coin: str, swap_ratio: Optional[float]) -> Price:
+        """Apply swap ratio adjustment for token conversions like LEND→AAVE."""
+        if not swap_ratio or swap_ratio == 1.0:
+            return price
+        
+        # For token swaps, the old token is worth 1/ratio of the new token
+        # E.g., 100 LEND = 1 AAVE, so 1 LEND = 1/100 AAVE price
+        adjusted_value = price.value / Decimal(str(swap_ratio))
+        
+        logger.debug(f"🔄 Swap ratio adjustment: {original_coin} price adjusted by 1/{swap_ratio} = {adjusted_value}")
+        
+        return Price(
+            value=adjusted_value,
+            coin=original_coin,  # Keep original coin symbol
+            currency=price.currency,
+            timestamp=price.timestamp,
+            source=f"{price.source}_swap_adjusted"
+        )
     
     def _get_lookup_key(self, request: PriceRequest) -> str:
         """Generate unique lookup key."""

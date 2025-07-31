@@ -150,6 +150,10 @@ class GermanTaxSummaryCalculator:
         for event in report_data.interest_events:
             if not hasattr(event, 'taxable_gain_in_fiat') or event.taxable_gain_in_fiat is None:
                 continue
+            
+            # Only include if actually taxable
+            if not getattr(event, 'is_taxable', True):
+                continue
                 
             income = decimal.Decimal(str(event.taxable_gain_in_fiat))
             total_income += income
@@ -166,6 +170,10 @@ class GermanTaxSummaryCalculator:
         # Process misc events (mining, airdrops, bounties)
         for event in report_data.misc_events:
             if not hasattr(event, 'taxable_gain_in_fiat') or event.taxable_gain_in_fiat is None:
+                continue
+            
+            # Only include if actually taxable
+            if not getattr(event, 'is_taxable', True):
                 continue
                 
             income = decimal.Decimal(str(event.taxable_gain_in_fiat))
