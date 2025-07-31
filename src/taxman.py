@@ -1248,6 +1248,59 @@ class Taxman:
         ws_summary.freeze_panes(1, 0)
 
         #
+        # Token-Änderungen (Symbol Changes) Sheet
+        #
+        from services.symbol_mappings import symbol_manager
+        ws_token_changes = wb.add_worksheet("Token-Änderungen")
+        
+        # Header for Token-Änderungen
+        token_headers = [
+            "Ursprünglicher Name",
+            "Neuer Name", 
+            "Änderungsdatum",
+            "Umtauschverhältnis",
+            "Art der Änderung",
+            "Beschreibung"
+        ]
+        ws_token_changes.write_row(0, 0, token_headers, header_format)
+        ws_token_changes.set_row(0, 45)
+        
+        # Data for Token-Änderungen
+        row = 1
+        for old_sym, new_sym, cutoff_date, swap_ratio, notes in symbol_manager.mappings:
+            change_type = "Rebrand"
+            if "fork" in notes.lower():
+                change_type = "Fork"
+            elif "collapse" in notes.lower():
+                change_type = "Kollaps"
+            elif "swap" in notes.lower():
+                change_type = "Token-Swap"
+            
+            ratio_text = f"{swap_ratio:.0f}:1" if swap_ratio and swap_ratio != 1.0 else "1:1"
+            date_text = cutoff_date.strftime('%d.%m.%Y') if cutoff_date else "Sofort"
+            
+            ws_token_changes.write_row(
+                row, 0, 
+                [old_sym, new_sym, date_text, ratio_text, change_type, notes]
+            )
+            row += 1
+        
+        # Add special LUNA case manually
+        ws_token_changes.write_row(
+            row, 0,
+            ["LUNA", "LUNC + LUNA(v2)", "12.05.2022", "1:1", "Ökosystem-Kollaps", 
+             "Terra Classic: Alte LUNA wurde zu LUNC, neue LUNA v2 wurde erstellt"]
+        )
+        
+        # Format Token-Änderungen sheet
+        ws_token_changes.set_column(0, 1, 20)  # Symbol columns
+        ws_token_changes.set_column(2, 2, 15, date_format)  # Date column
+        ws_token_changes.set_column(3, 3, 18)  # Ratio column
+        ws_token_changes.set_column(4, 4, 20)  # Type column
+        ws_token_changes.set_column(5, 5, 60)  # Description column
+        ws_token_changes.freeze_panes(1, 0)
+
+        #
         # Sheets per ReportType
         #
         for event_type, tax_report_entries in misc.group_by(
